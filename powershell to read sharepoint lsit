@@ -1,0 +1,49 @@
+# Parameters
+$siteUrl = "https://yourcompany.sharepoint.com/sites/yoursite"
+$listName = "YourListName"
+$nasPath = "\\NAS\Path\To\Save\Attachments"
+
+# Load SharePoint CSOM Assemblies
+Add-Type -Path "C:\Path\To\Microsoft.SharePoint.Client.dll"
+Add-Type -Path "C:\Path\To\Microsoft.SharePoint.Client.Runtime.dll"
+
+# Connect to SharePoint Online using default Windows credentials
+$context = New-Object Microsoft.SharePoint.Client.ClientContext($siteUrl)
+$context.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+
+# Get the list
+$list = $context.Web.Lists.GetByTitle($listName)
+$context.Load($list)
+$context.ExecuteQuery()
+
+# Get the list items
+$query = New-Object Microsoft.SharePoint.Client.CamlQuery
+$items = $list.GetItems($query)
+$context.Load($items)
+$context.ExecuteQuery()
+
+# Loop through each item and download attachments
+foreach ($item in $items) {
+    $attachmentsFolder = $item.AttachmentFiles
+    $context.Load($attachmentsFolder)
+    $context.ExecuteQuery()
+
+    foreach ($attachment in $attachmentsFolder) {
+        $fileName = $attachment.FileName
+        $fileUrl = $attachment.ServerRelativeUrl
+        $fileInfo = [Microsoft.SharePoint.Client.File]::OpenBinaryDirect($context, $fileUrl)
+        
+        # Create NAS directory if it doesn't exist
+        $nasItemPath = Join-Path $nasPath $item.Id
+        if (-not (Test-Path $nasItemPath)) {
+            New-Item -Path $nasItemPath -ItemType Directory
+        }
+        
+        # Save the file to NAS
+        $filePath = Join-Path $nasItemPath $fileName
+        [System.IO.File]::WriteAllBytes($filePath, $fileInfo.Stream.ToArray())
+        Write-Host "Downloaded: $fileName to $filePath"
+    }
+}
+
+Write-Host "All attachments downloaded successfully!"
