@@ -1,0 +1,61 @@
+import boto3
+import json
+import time
+
+glue_client = boto3.client('glue')
+lambda_client = boto3.client('lambda')
+
+def start_crawler(crawler_name):
+    try:
+        glue_client.start_crawler(Name=crawler_name)
+        print(f'Crawler {crawler_name} started successfully')
+    except Exception as e:
+        print(f'Error starting crawler: {str(e)}')
+        raise e
+
+def check_crawler_status(crawler_name):
+    try:
+        response = glue_client.get_crawler(Name=crawler_name)
+        return response['Crawler']['State']
+    except Exception as e:
+        print(f'Error checking crawler status: {str(e)}')
+        raise e
+
+def invoke_post_crawler_lambda(function_name):
+    try:
+        response = lambda_client.invoke(
+            FunctionName=function_name,
+            InvocationType='Event'
+        )
+        print(f'Invoked Lambda function {function_name}')
+    except Exception as e:
+        print(f'Error invoking Lambda function: {str(e)}')
+        raise e
+
+def lambda_handler(event, context):
+    crawler_name = 'your_crawler_name'  # Replace with your actual crawler name
+    post_crawler_lambda_function_name = 'your_post_crawler_lambda_function_name'  # Replace with your post-crawler Lambda function name
+
+    # Start the Glue crawler
+    start_crawler(crawler_name)
+
+    # Poll the status of the Glue crawler
+    while True:
+        status = check_crawler_status(crawler_name)
+        print(f'Crawler status: {status}')
+        if status == 'READY':
+            # Crawler has completed
+            invoke_post_crawler_lambda(post_crawler_lambda_function_name)
+            break
+        elif status == 'RUNNING':
+            # Crawler is still running, wait before checking again
+            time.sleep(60)  # Wait for 60 seconds before checking again
+        else:
+            # Handle other statuses if necessary
+            print(f'Unexpected crawler status: {status}')
+            break
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Crawler monitoring complete')
+    }
