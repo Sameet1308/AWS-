@@ -1,0 +1,18 @@
+import boto3
+import json
+
+def lambda_handler(event, context):
+    client = boto3.client('glue')
+    crawler_name = 'your_crawler_name'  # Replace with your actual crawler name
+
+    try:
+        response = client.start_crawler(Name=crawler_name)
+        return {
+            'statusCode': 200,
+            'body': json.dumps('Crawler started successfully')
+        }
+    except Exception as e:
+        return {
+            'statusCode': 500,
+            'body': json.dumps(f'Error starting crawler: {str(e)}')
+        }
