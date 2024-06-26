@@ -1,0 +1,26 @@
+import logging
+import pandas as pd
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def csv_to_parquet(csv_file_path, parquet_file_path):
+    try:
+        # Read the CSV file
+        df = pd.read_csv(csv_file_path)
+        logging.info(f"Read CSV file: {csv_file_path}")
+        
+        # Convert to Parquet and save to the specified path
+        df.to_parquet(parquet_file_path, index=False)
+        logging.info(f"Converted to Parquet and saved to: {parquet_file_path}")
+        
+    except Exception as e:
+        logging.error(f"Error converting {csv_file_path} to Parquet: {e}")
+
+# Example usage
+csv_file_path = '/path/to/your/nas/location/xbxbx.csv'
+parquet_file_path = '/path/to/your/nas/location/xbxbx.parquet'
+
+csv_to_parquet(csv_file_path, parquet_file_path)
+
+print(f"Converted {csv_file_path} to {parquet_file_path}")
