@@ -37,11 +37,18 @@ def list_objects(bucket, prefix):
                 objects[obj['Key']] = obj['LastModified']
     return objects
 
-def convert_csv_to_parquet(csv_content):
-    """Converts CSV content to Parquet format."""
-    csv_df = pd.read_csv(io.StringIO(csv_content))
+def convert_csv_to_parquet_streaming(csv_obj):
+    """Converts CSV content to Parquet format using streaming."""
+    chunksize = 10 ** 6  # Define a suitable chunk size
     parquet_buffer = io.BytesIO()
-    csv_df.to_parquet(parquet_buffer, index=False)
+    writer = None
+
+    for chunk in pd.read_csv(csv_obj, chunksize=chunksize):
+        if writer is None:
+            writer = pd.ExcelWriter(parquet_buffer, engine='parquet')
+        chunk.to_parquet(writer, index=False, engine='pyarrow')
+
+    writer.close()
     parquet_buffer.seek(0)
     return parquet_buffer
 
@@ -71,11 +78,10 @@ def lambda_handler(event, context):
                     continue
 
             # Get the CSV content from the source S3 bucket
-            csv_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)
-            csv_content = csv_obj['Body'].read().decode('utf-8')
+            csv_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)['Body']
 
-            # Convert CSV to Parquet
-            parquet_buffer = convert_csv_to_parquet(csv_content)
+            # Convert CSV to Parquet using streaming
+            parquet_buffer = convert_csv_to_parquet_streaming(csv_obj)
 
             # Upload the Parquet file to the target S3 bucket with KMS encryption
             try:
