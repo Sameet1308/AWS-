@@ -78,10 +78,18 @@ def lambda_handler(event, context):
                     continue
 
             # Get the CSV content from the source S3 bucket
-            csv_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)['Body']
+            try:
+                csv_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)['Body']
+            except Exception as e:
+                logger.error(f"Error getting object {source_key} from bucket {source_bucket}: {e}")
+                continue
 
             # Convert CSV to Parquet using streaming
-            parquet_buffer = convert_csv_to_parquet_streaming(csv_obj)
+            try:
+                parquet_buffer = convert_csv_to_parquet_streaming(csv_obj)
+            except Exception as e:
+                logger.error(f"Error converting CSV to Parquet for object {source_key}: {e}")
+                continue
 
             # Upload the Parquet file to the target S3 bucket with KMS encryption
             try:
