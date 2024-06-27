@@ -1,3 +1,3 @@
 @echo off
-REM Open Condaplus Prompt, activate environment, run the script, and deactivate
-"%windir%\system32\cmd.exe" /K "C:\Program Files\Condaplus\Scripts\activate.bat local_test_env && python \\tyu.net\you.py && conda deactivate && pause"
+REM Start Condaplus Prompt and execute commands
+start "" "%windir%\system32\cmd.exe" /K "call C:\Program Files\Condaplus\Scripts\activate.bat local_test_env && python \\tyu.net\you.py && call conda deactivate && pause"
