@@ -1,3 +1,15 @@
 @echo off
-REM Start Condaplus Prompt and execute commands
-start "" "%windir%\system32\cmd.exe" /K "call C:\Program Files\Condaplus\Scripts\activate.bat local_test_env && python \\tyu.net\you.py && call conda deactivate && pause"
+REM Run the target command from Condaplus shortcut
+call "C:\Path\To\Condaplus\condaplus.bat"
+
+REM Activate the Conda environment
+call conda activate local_test_env
+
+REM Run the Python script inside the Conda environment, specifying the network path
+python "\\tyu.net\shared\you.py"
+
+REM Deactivate the Conda environment
+call conda deactivate
+
+REM Pause to keep the command window open
+pause
