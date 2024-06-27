@@ -1,12 +1,24 @@
 @echo off
+REM Set the path to the Condaplus activation script
+set CONDAPLUS_SCRIPT="C:\Path\To\Condaplus\condaplus.bat"
+
+REM Set the network path to the Python script
+set PYTHON_SCRIPT_PATH="\\dummy.network\path\to\scripts\myscript.py"
+
 REM Run the target command from Condaplus shortcut
-call "C:\Path\To\Condaplus\condaplus.bat"
+call %CONDAPLUS_SCRIPT%
 
 REM Activate the Conda environment
 call conda activate local_test_env
 
-REM Run the Python script inside the Conda environment, specifying the network path
-python "\\tyu.net\shared\you.py"
+REM Map the UNC path to a drive letter and change to that directory
+pushd \\dummy.network\path\to\scripts
+
+REM Run the Python script inside the Conda environment
+python myscript.py
+
+REM Return to the original directory and unmap the drive
+popd
 
 REM Deactivate the Conda environment
 call conda deactivate
