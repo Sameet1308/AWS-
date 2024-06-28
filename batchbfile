@@ -1,30 +1,9 @@
 @echo off
-REM Path to Condaplus activation script
-set CONDAPLUS_SCRIPT="C:\Path\To\Condaplus\condaplus.bat"
+REM Map the shared location to a drive letter
+pushd \\networkserver\sharedfolder
 
-REM Path to the network share
-set NETWORK_PATH="\\networkserver\sharedfolder"
+REM Start the Condaplus Prompt
+start "" cmd.exe /K "call C:\Path\To\Condaplus\condaplus.bat ^&^& cd /d C:\ndznz\wjsj ^&^& call activate local_test_env ^&^& python myscript.py ^&^& call conda deactivate ^&^& popd ^&^& exit"
 
-REM Python script name
-set PYTHON_SCRIPT="myscript.py"
-
-REM Run the Condaplus activation script
-call %CONDAPLUS_SCRIPT%
-
-REM Activate the Conda environment
-call conda activate local_test_env
-
-REM Map the network path to a drive letter and change to that directory
-pushd %NETWORK_PATH%
-
-REM Run the Python script inside the Conda environment
-python %PYTHON_SCRIPT%
-
-REM Return to the original directory and unmap the drive
+REM Unmap the drive letter
 popd
-
-REM Deactivate the Conda environment
-call conda deactivate
-
-REM Pause to keep the command window open
-pause
