@@ -5,8 +5,11 @@ cd /d C:\wnd
 REM Start Anaconda Prompt and activate conda environment
 call "C:\Users\YourUsername\anaconda3\Scripts\activate.bat" your_env_name
 
+REM Ensure the conda environment is activated
+conda activate your_env_name
+
 REM Run the Python script
-python C:\wnd\your_script.py
+python target.py
 
 REM Deactivate conda environment
 conda deactivate
