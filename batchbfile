@@ -1,9 +1,15 @@
 @echo off
-REM Map the shared location to a drive letter
-pushd \\networkserver\sharedfolder
+REM Navigate to the local directory
+cd /d C:\wnd
 
-REM Start the Condaplus Prompt
-start "" cmd.exe /K "call C:\Path\To\Condaplus\condaplus.bat ^&^& cd /d C:\ndznz\wjsj ^&^& call activate local_test_env ^&^& python myscript.py ^&^& call conda deactivate ^&^& popd ^&^& exit"
+REM Start Anaconda Prompt and activate conda environment
+call "C:\Users\YourUsername\anaconda3\Scripts\activate.bat" your_env_name
 
-REM Unmap the drive letter
-popd
+REM Run the Python script
+python C:\wnd\your_script.py
+
+REM Deactivate conda environment
+conda deactivate
+
+REM Pause to keep the command prompt open
+pause
