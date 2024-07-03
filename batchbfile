@@ -1,33 +1,24 @@
 @echo off
-REM Map network drive to Z:
-net use Z: \\your\network\path
 
-REM Navigate to the mapped drive directory
-cd /d Z:\path\to\your\directory
+REM Activate the Conda environment
+CALL conda activate myenv
 
-REM Start Anaconda Prompt and activate conda environment
-echo Activating conda environment
-call "C:\Users\YourUsername\anaconda3\Scripts\activate.bat" your_env_name
-
-REM Ensure the conda environment is activated
-echo Ensuring conda environment is activated
-conda activate your_env_name
-
-REM Check if the environment is activated
-echo Current environment:
-conda info --envs
+REM Check if the activation was successful
+IF ERRORLEVEL 1 (
+    echo Failed to activate Conda environment
+    exit /b 1
+)
 
 REM Run the Python script
-echo Running the Python script target.py
-python target.py
+python path\to\your\script.py
 
-REM Deactivate conda environment
-echo Deactivating conda environment
-conda deactivate
+REM Check if the script execution was successful
+IF ERRORLEVEL 1 (
+    echo Python script execution failed
+    exit /b 1
+)
 
-REM Disconnect the network drive
-net use Z: /delete
+REM Deactivate the Conda environment
+CALL conda deactivate
 
-REM Pause to keep the command prompt open
-echo Finished, press any key to exit
-pause
+echo Script completed successfully
