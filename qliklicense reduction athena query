@@ -1,20 +1,28 @@
+WITH single_app_users AS (
+    SELECT user, app_name
+    FROM user_applications
+    GROUP BY user, app_name
+    HAVING COUNT(app_name) = 1
+),
+multi_app_users AS (
+    SELECT user, app_name
+    FROM user_applications
+    GROUP BY user, app_name
+    HAVING COUNT(app_name) > 1
+)
 SELECT 
     ua.app_name AS Application,
-    COUNT(DISTINCT CASE WHEN single_app_users.user IS NOT NULL THEN single_app_users.user END) AS Unique_Users,
-    ARRAY_JOIN(ARRAY_AGG(DISTINCT CASE WHEN single_app_users.user IS NOT NULL THEN CAST(single_app_users.user AS VARCHAR) END), ', ') AS Unique_User_List,
-    COUNT(DISTINCT CASE WHEN multi_app_users.user IS NOT NULL THEN multi_app_users.user END) AS Multi_App_Users,
-    ARRAY_JOIN(ARRAY_AGG(DISTINCT CASE WHEN multi_app_users.user IS NOT NULL THEN CAST(multi_app_users.user AS VARCHAR) END), ', ') AS Multi_App_User_List
+    COUNT(DISTINCT single_app_users.user) AS Unique_Users,
+    ARRAY_JOIN(ARRAY_AGG(DISTINCT single_app_users.user), ', ') AS Unique_User_List,
+    COUNT(DISTINCT multi_app_users.user) AS Multi_App_Users,
+    ARRAY_JOIN(ARRAY_AGG(DISTINCT multi_app_users.user), ', ') AS Multi_App_User_List
 FROM 
     user_applications ua
 LEFT JOIN 
-    (SELECT user, app_name FROM user_applications
-     GROUP BY user, app_name
-     HAVING COUNT(app_name) = 1) single_app_users 
+    single_app_users 
 ON ua.user = single_app_users.user AND ua.app_name = single_app_users.app_name
 LEFT JOIN 
-    (SELECT user, app_name FROM user_applications
-     GROUP BY user, app_name
-     HAVING COUNT(app_name) > 1) multi_app_users 
+    multi_app_users 
 ON ua.user = multi_app_users.user AND ua.app_name = multi_app_users.app_name
 GROUP BY 
     ua.app_name
