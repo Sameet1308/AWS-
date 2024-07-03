@@ -1,14 +1,28 @@
-WITH single_app_users AS (
-    SELECT user, app_name
-    FROM user_applications
-    GROUP BY user, app_name
-    HAVING COUNT(app_name) = 1
+WITH user_app_counts AS (
+    SELECT 
+        user,
+        app_name,
+        COUNT(*) OVER (PARTITION BY user) AS app_count
+    FROM 
+        user_applications
+),
+single_app_users AS (
+    SELECT 
+        user, 
+        app_name
+    FROM 
+        user_app_counts
+    WHERE 
+        app_count = 1
 ),
 multi_app_users AS (
-    SELECT user, app_name
-    FROM user_applications
-    GROUP BY user, app_name
-    HAVING COUNT(app_name) > 1
+    SELECT 
+        user, 
+        app_name
+    FROM 
+        user_app_counts
+    WHERE 
+        app_count > 1
 )
 SELECT 
     ua.app_name AS Application,
