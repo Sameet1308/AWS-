@@ -1,17 +1,31 @@
-WITH user_app_counts AS (
+WITH recent_data AS (
     SELECT 
         user,
         app_name,
+        year,
+        month,
         COUNT(*) OVER (PARTITION BY user) AS app_count
     FROM 
         user_applications
+    WHERE 
+        (year, month) IN (
+            SELECT 
+                year, month
+            FROM 
+                user_applications
+            GROUP BY 
+                year, month
+            ORDER BY 
+                year DESC, month DESC
+            LIMIT 3
+        )
 ),
 single_app_users AS (
     SELECT 
         user, 
         app_name
     FROM 
-        user_app_counts
+        recent_data
     WHERE 
         app_count = 1
 ),
@@ -20,25 +34,26 @@ multi_app_users AS (
         user, 
         app_name
     FROM 
-        user_app_counts
+        recent_data
     WHERE 
         app_count > 1
 )
 SELECT 
-    ua.app_name AS Application,
+    rd.app_name AS Application,
     COUNT(DISTINCT single_app_users.user) AS Unique_Users,
     ARRAY_JOIN(ARRAY_AGG(DISTINCT single_app_users.user), ', ') AS Unique_User_List,
     COUNT(DISTINCT multi_app_users.user) AS Multi_App_Users,
-    ARRAY_JOIN(ARRAY_AGG(DISTINCT multi_app_users.user), ', ') AS Multi_App_User_List
+    ARRAY_JOIN(ARRAY_AGG(DISTINCT multi_app_users.user), ', ') AS Multi_App_User_List,
+    RANK() OVER (ORDER BY COUNT(DISTINCT single_app_users.user) DESC) AS Rank
 FROM 
-    user_applications ua
+    recent_data rd
 LEFT JOIN 
     single_app_users 
-ON ua.user = single_app_users.user AND ua.app_name = single_app_users.app_name
+ON rd.user = single_app_users.user AND rd.app_name = single_app_users.app_name
 LEFT JOIN 
     multi_app_users 
-ON ua.user = multi_app_users.user AND ua.app_name = multi_app_users.app_name
+ON rd.user = multi_app_users.user AND rd.app_name = multi_app_users.app_name
 GROUP BY 
-    ua.app_name
+    rd.app_name
 ORDER BY 
-    ua.app_name;
+    Rank;
