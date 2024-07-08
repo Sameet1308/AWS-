@@ -1,24 +1,36 @@
-@echo off
+# Ensure script stops on first error
+$ErrorActionPreference = "Stop"
 
-REM Activate the Conda environment
-CALL conda activate myenv
+# Change to the script directory
+cd $PSScriptRoot
 
-REM Check if the activation was successful
-IF ERRORLEVEL 1 (
-    echo Failed to activate Conda environment
-    exit /b 1
-)
+# Initialize Conda for PowerShell
+& "$env:USERPROFILE\anaconda3\shell\condabin\conda-hook.ps1"
+if (-not $?) {
+    Write-Error "Failed to initialize Conda."
+    exit 1
+}
 
-REM Run the Python script
-python path\to\your\script.py
+# Activate the Conda environment
+conda activate myenv
+if (-not $?) {
+    Write-Error "Failed to activate Conda environment 'myenv'."
+    exit 1
+}
 
-REM Check if the script execution was successful
-IF ERRORLEVEL 1 (
-    echo Python script execution failed
-    exit /b 1
-)
+# Run the Python script
+python .\myscript.py
+if (-not $?) {
+    Write-Error "Python script execution failed."
+    conda deactivate
+    exit 1
+}
 
-REM Deactivate the Conda environment
-CALL conda deactivate
+# Deactivate the Conda environment
+conda deactivate
+if (-not $?) {
+    Write-Error "Failed to deactivate Conda environment."
+    exit 1
+}
 
-echo Script completed successfully
+Write-Output "Script completed successfully."
