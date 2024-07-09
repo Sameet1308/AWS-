@@ -1,0 +1,13 @@
+import pandas as pd
+
+# Step 1: Read the text file into a pandas DataFrame
+# Specifying the delimiter and assuming headers are in the first row
+df = pd.read_csv('data.txt', delimiter='~', header=0)
+
+# Optional: Convert column types if needed
+# df['column_name'] = df['column_name'].astype('desired_type')
+
+# Step 2: Convert the DataFrame to a Parquet file
+df.to_parquet('data.parquet', index=False)
+
+print("Conversion to Parquet completed successfully!")
