@@ -6,7 +6,12 @@ target_path = 'path/to/your/data.parquet'  # Replace with your actual target pat
 
 # Step 1: Read the text file into a pandas DataFrame
 # Specifying the delimiter and assuming headers are in the first row
-df = pd.read_csv(source_path, delimiter='~', header=0)
+# Including encoding and error handling
+try:
+    df = pd.read_csv(source_path, delimiter='~', header=0, encoding='utf-8', error_bad_lines=False)
+except UnicodeDecodeError:
+    print("UTF-8 decoding error encountered. Trying with ISO-8859-1 encoding.")
+    df = pd.read_csv(source_path, delimiter='~', header=0, encoding='ISO-8859-1', error_bad_lines=False)
 
 # Optional: Convert column types if needed
 # df['column_name'] = df['column_name'].astype('desired_type')
