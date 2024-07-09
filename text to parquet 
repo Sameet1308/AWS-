@@ -1,13 +1,17 @@
 import pandas as pd
 
+# Define the source path for the text file and the target path for the Parquet file
+source_path = 'path/to/your/data.txt'  # Replace with your actual source path
+target_path = 'path/to/your/data.parquet'  # Replace with your actual target path
+
 # Step 1: Read the text file into a pandas DataFrame
 # Specifying the delimiter and assuming headers are in the first row
-df = pd.read_csv('data.txt', delimiter='~', header=0)
+df = pd.read_csv(source_path, delimiter='~', header=0)
 
 # Optional: Convert column types if needed
 # df['column_name'] = df['column_name'].astype('desired_type')
 
 # Step 2: Convert the DataFrame to a Parquet file
-df.to_parquet('data.parquet', index=False)
+df.to_parquet(target_path, index=False)
 
 print("Conversion to Parquet completed successfully!")
