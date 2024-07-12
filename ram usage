@@ -1,64 +1,24 @@
-import uuid
-from smbprotocol.connection import Connection
-from smbprotocol.session import Session
-from smbprotocol.tree import TreeConnect
-from smbprotocol.open import Open, CreateDisposition
+# Define the path to the Conda executable and the environment name
+$condaPath = "C:\path\to\conda\Scripts\conda.exe"
+$envName = "myenv"
 
-# Define your SMB details
-source_unc_path = r'\\hshs.trav.net\yeue\file.txt'  # The UNC path to the source file
-destination_unc_path = r'\\hshs.trav.net\yeue\copied_file.txt'  # The UNC path to the destination file
+# Get the directory of the current PowerShell script
+$scriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
 
-# Define credentials directly in the script
-username = 'your_username'
-password = 'your_password'
+# Define the path to the Python script
+$pythonScriptPath = Join-Path -Path $scriptDirectory -ChildPath "convert_csv_to_parquet.py"
 
-# Helper function to parse UNC path and extract server and share
-def parse_unc_path(unc_path):
-    parts = unc_path.strip('\\').split('\\', 2)
-    server_name = parts[0]
-    share_name = parts[1]
-    file_path = f"\\{parts[2]}" if len(parts) > 2 else ''
-    return server_name, share_name, file_path
+# Define the command to activate the Conda environment
+$activateCommand = "& `"$condaPath`" activate $envName"
 
-# Helper function to connect to SMB share
-def smb_connect(server_name, share_name, username, password):
-    connection = Connection(uuid.uuid4(), server_name, 445)
-    connection.connect()
-    session = Session(connection, username, password)
-    session.connect()
-    tree = TreeConnect(session, f'\\\\{server_name}\\{share_name}')
-    tree.connect()
-    return connection, session, tree
+# Define the command to run the Python script within the Conda environment
+$runPythonCommand = "& `"$env:CONDA_PREFIX\python.exe`" `"$pythonScriptPath`""
 
-# Helper function to copy file from source to destination
-def copy_file(source_unc_path, destination_unc_path, username, password):
-    # Parse source and destination UNC paths
-    src_server, src_share, src_file_path = parse_unc_path(source_unc_path)
-    dst_server, dst_share, dst_file_path = parse_unc_path(destination_unc_path)
+# Define the command to deactivate the Conda environment
+$deactivateCommand = "& `"$condaPath`" deactivate"
 
-    # Connect to the source share
-    connection, session, tree_source = smb_connect(src_server, src_share, username, password)
-    source_file = Open(tree_source, src_file_path, access="read")
+# Combine the commands
+$fullCommand = "$activateCommand; $runPythonCommand; $deactivateCommand"
 
-    # Connect to the destination share
-    _, _, tree_destination = smb_connect(dst_server, dst_share, username, password)
-    destination_file = Open(tree_destination, dst_file_path, access="write", disposition=CreateDisposition.FILE_OVERWRITE_IF)
-
-    # Read the file from source and write to destination
-    with source_file:
-        with destination_file:
-            data = source_file.read()
-            destination_file.write(data)
-    
-    # Close connections
-    tree_source.disconnect()
-    tree_destination.disconnect()
-    session.disconnect()
-    connection.disconnect()
-
-# Main function to perform the copy
-def main():
-    copy_file(source_unc_path, destination_unc_path, username, password)
-
-if __name__ == "__main__":
-    main()
+# Execute the combined commands
+Invoke-Expression $fullCommand
