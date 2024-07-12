@@ -1,1 +1,66 @@
-Factors Affecting Memory ConsumptionNumber of Rows (R)Number of Attributes (A)Number of Metrics (M)Data Type Sizes (D)Processing Overhead (P)Simplified Memory Calculation FormulaThe memory consumption ( M ) can be approximated using the following formula:[ M = (R \times (A \times D_a + M \times D_m)) + P ]Where:( R ) = Number of rows in the cube( A ) = Number of attributes( M ) = Number of metrics( D_a ) = Average size of attribute data types (in bytes)( D_m ) = Average size of metric data types (in bytes)( P ) = Processing overhead (additional memory required for processing)
+import uuid
+from smbprotocol.connection import Connection
+from smbprotocol.session import Session
+from smbprotocol.tree import TreeConnect
+from smbprotocol.open import Open, FilePipePrinter
+
+# Define your SMB details
+source_unc_path = r'\\hshs.trav.net\yeue\file.txt'  # The UNC path to the source file
+destination_unc_path = r'\\hshs.trav.net\yeue\copied_file.txt'  # The UNC path to the destination file
+
+# Define credentials directly in the script
+username = 'your_username'
+password = 'your_password'
+
+# Helper function to parse UNC path and extract server and share
+def parse_unc_path(unc_path):
+    parts = unc_path.strip('\\').split('\\', 2)
+    server_name = parts[0]
+    share_name = parts[1]
+    file_path = f"\\{parts[2]}" if len(parts) > 2 else ''
+    return server_name, share_name, file_path
+
+# Helper function to connect to SMB share
+def smb_connect(server_name, share_name, username, password):
+    connection = Connection(uuid.uuid4(), server_name, 445)
+    connection.connect()
+    session = Session(connection, username, password)
+    session.connect()
+    tree = TreeConnect(session, f'\\\\{server_name}\\{share_name}')
+    tree.connect()
+    return connection, session, tree
+
+# Helper function to copy file from source to destination
+def copy_file(source_unc_path, destination_unc_path, username, password):
+    # Parse source and destination UNC paths
+    src_server, src_share, src_file_path = parse_unc_path(source_unc_path)
+    dst_server, dst_share, dst_file_path = parse_unc_path(destination_unc_path)
+
+    # Connect to the source share
+    connection, session, tree_source = smb_connect(src_server, src_share, username, password)
+    source_file = Open(tree_source, src_file_path, access=FilePipePrinter.FILE_READ_DATA)
+
+    # Connect to the destination share
+    _, _, tree_destination = smb_connect(dst_server, dst_share, username, password)
+    destination_file = Open(tree_destination, dst_file_path, access=FilePipePrinter.FILE_WRITE_DATA)
+
+    # Read the file from source and write to destination
+    with source_file.open(FilePipePrinter.FILE_OPEN, FilePipePrinter.FILE_READ_DATA) as src_f, \
+            destination_file.create(FilePipePrinter.FILE_OVERWRITE_IF, FilePipePrinter.FILE_WRITE_DATA) as dst_f:
+        data = src_f.read()
+        dst_f.write(data)
+    
+    # Close connections
+    destination_file.close()
+    source_file.close()
+    tree_source.disconnect()
+    tree_destination.disconnect()
+    session.disconnect()
+    connection.disconnect()
+
+# Main function to perform the copy
+def main():
+    copy_file(source_unc_path, destination_unc_path, username, password)
+
+if __name__ == "__main__":
+    main()
