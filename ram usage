@@ -2,7 +2,7 @@ import uuid
 from smbprotocol.connection import Connection
 from smbprotocol.session import Session
 from smbprotocol.tree import TreeConnect
-from smbprotocol.open import Open, FilePipePrinter
+from smbprotocol.open import Open, CreateDisposition
 
 # Define your SMB details
 source_unc_path = r'\\hshs.trav.net\yeue\file.txt'  # The UNC path to the source file
@@ -38,21 +38,19 @@ def copy_file(source_unc_path, destination_unc_path, username, password):
 
     # Connect to the source share
     connection, session, tree_source = smb_connect(src_server, src_share, username, password)
-    source_file = Open(tree_source, src_file_path, access=FilePipePrinter.FILE_READ_DATA)
+    source_file = Open(tree_source, src_file_path, access="read")
 
     # Connect to the destination share
     _, _, tree_destination = smb_connect(dst_server, dst_share, username, password)
-    destination_file = Open(tree_destination, dst_file_path, access=FilePipePrinter.FILE_WRITE_DATA)
+    destination_file = Open(tree_destination, dst_file_path, access="write", disposition=CreateDisposition.FILE_OVERWRITE_IF)
 
     # Read the file from source and write to destination
-    with source_file.open(FilePipePrinter.FILE_OPEN, FilePipePrinter.FILE_READ_DATA) as src_f, \
-            destination_file.create(FilePipePrinter.FILE_OVERWRITE_IF, FilePipePrinter.FILE_WRITE_DATA) as dst_f:
-        data = src_f.read()
-        dst_f.write(data)
+    with source_file:
+        with destination_file:
+            data = source_file.read()
+            destination_file.write(data)
     
     # Close connections
-    destination_file.close()
-    source_file.close()
     tree_source.disconnect()
     tree_destination.disconnect()
     session.disconnect()
