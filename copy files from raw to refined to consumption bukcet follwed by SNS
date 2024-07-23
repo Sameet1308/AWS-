@@ -1,25 +1,26 @@
-# copy files from raw to refined to consumption bukcet follwed by SNS
 import boto3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import os
 
+# Initialize the S3 client
 s3 = boto3.client('s3')
-sns = boto3.client('sns')
 
 # Replace with your KMS Key ID for the consumption bucket
-kms_key_id = 'your-kms-key-id'
+kms_key_id = '1234abcd-12ab-34cd-56ef-1234567890ab'
 
 # Define the allowed prefixes
-raw_allowed_prefix = 'your/raw/allowed/prefix/'
-refined_prefix = 'your/refined/prefix/'
-consumption_prefix = 'your/consumption/prefix/'
+raw_allowed_prefix = 'data/raw/'
+refined_prefix = 'data/refined/'
+consumption_prefix = 'data/consumption/'
 
+# Function to remove spaces from column headers
 def remove_spaces_from_headers(df):
     df.columns = df.columns.str.replace(' ', '_')
     return df
 
+# Function to read different file types into a DataFrame
 def read_file(file_path, file_extension):
     if file_extension == '.csv':
         return pd.read_csv(file_path)
@@ -29,14 +30,6 @@ def read_file(file_path, file_extension):
         return pd.read_csv(file_path, delimiter='\t')
     else:
         raise ValueError('Unsupported file type')
-
-def send_sns_notification(message, subject, topic_arn):
-    response = sns.publish(
-        TopicArn=topic_arn,
-        Message=message,
-        Subject=subject
-    )
-    return response
 
 def lambda_handler(event, context):
     try:
@@ -48,7 +41,7 @@ def lambda_handler(event, context):
         if not raw_key.startswith(raw_allowed_prefix):
             raise ValueError(f"Object key {raw_key} does not start with the allowed prefix {raw_allowed_prefix}")
         
-        # Download the raw file
+        # Download the raw file from the raw bucket
         download_path = '/tmp/' + raw_key.split('/')[-1]
         s3.download_file(raw_bucket, raw_key, download_path)
         
@@ -61,7 +54,7 @@ def lambda_handler(event, context):
         # Remove spaces from column headers
         df = remove_spaces_from_headers(df)
         
-        # Convert DataFrame to Parquet
+        # Convert the DataFrame to a Parquet file
         table = pa.Table.from_pandas(df)
         parquet_path = download_path.replace(file_extension, '.parquet')
         pq.write_table(table, parquet_path)
@@ -71,7 +64,7 @@ def lambda_handler(event, context):
         refined_key = refined_prefix + raw_key[len(raw_allowed_prefix):].replace(file_extension, '.parquet')
         s3.upload_file(parquet_path, refined_bucket, refined_key)
         
-        # Move the Parquet file to the consumption bucket with KMS encryption
+        # Copy the Parquet file to the consumption bucket with KMS encryption
         consumption_bucket = 'consumption-bucket'
         consumption_key = consumption_prefix + raw_key[len(raw_allowed_prefix):].replace(file_extension, '.parquet')
         copy_source = {'Bucket': refined_bucket, 'Key': refined_key}
@@ -81,29 +74,13 @@ def lambda_handler(event, context):
         os.remove(download_path)
         os.remove(parquet_path)
         
-        # Get the SNS topic ARN from environment variables
-        sns_topic_arn = os.environ['SNS_TOPIC_ARN']
-        
-        # Send SNS notification
-        message = f"Successfully processed and moved {raw_key} to {consumption_bucket}"
-        subject = "S3 File Processing Notification"
-        send_sns_notification(message, subject, sns_topic_arn)
-        
         return {
             'statusCode': 200,
-            'body': message
+            'body': f"Successfully processed and moved {raw_key} to {consumption_bucket}"
         }
     
     except Exception as e:
-        # Get the SNS topic ARN from environment variables
-        sns_topic_arn = os.environ['SNS_TOPIC_ARN']
-        
-        # Send failure notification
-        message = f"Failed to process {raw_key}. Error: {str(e)}"
-        subject = "S3 File Processing Error"
-        send_sns_notification(message, subject, sns_topic_arn)
-        
         return {
             'statusCode': 500,
-            'body': message
+            'body': f"Failed to process {raw_key}. Error: {str(e)}"
         }
