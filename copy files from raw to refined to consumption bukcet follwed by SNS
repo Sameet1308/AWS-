@@ -91,6 +91,8 @@ def lambda_handler(event, context):
             # Get the file content from the source S3 bucket
             try:
                 file_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)['Body']
+                file_content = file_obj.read()
+                file_obj = io.BytesIO(file_content)  # Reset the buffer for reading
             except Exception as e:
                 logger.error(f"Error getting object {source_key} from bucket {source_bucket}: {e}")
                 continue
