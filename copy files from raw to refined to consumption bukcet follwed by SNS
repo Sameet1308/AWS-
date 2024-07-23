@@ -1,126 +1,56 @@
+import json
 import boto3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import os
+import io
 
-# Initialize the S3 client
 s3 = boto3.client('s3')
-
-# Replace with your KMS Key ARN for the consumption bucket
-kms_key_arn = 'arn:aws:kms:us-east-343553:key/37377hd888383j-djj-djjd'
-
-# Define the allowed prefixes
-raw_allowed_prefix = 'data/raw/'
-refined_prefix = 'data/refined/'
-consumption_prefix = 'data/consumption/'
-
-# Function to remove spaces from column headers
-def remove_spaces_from_headers(df):
-    df.columns = df.columns.str.replace(' ', '_')
-    return df
-
-# Function to read different file types into a DataFrame
-def read_file(file_path, file_extension):
-    if file_extension == '.csv':
-        return pd.read_csv(file_path)
-    elif file_extension in ['.xls', '.xlsx']:
-        return pd.read_excel(file_path)
-    elif file_extension == '.txt':
-        return pd.read_csv(file_path, delimiter='\t')
-    else:
-        raise ValueError('Unsupported file type')
-
-# Function to check if a file has been processed
-def is_file_processed(bucket, key):
-    try:
-        response = s3.get_object_tagging(Bucket=bucket, Key=key)
-        for tag in response['TagSet']:
-            if tag['Key'] == 'processed' and tag['Value'] == 'true':
-                return True
-        return False
-    except Exception as e:
-        return False
-
-# Function to tag a file as processed
-def tag_file_as_processed(bucket, key):
-    try:
-        s3.put_object_tagging(
-            Bucket=bucket,
-            Key=key,
-            Tagging={
-                'TagSet': [
-                    {
-                        'Key': 'processed',
-                        'Value': 'true'
-                    }
-                ]
-            }
-        )
-    except Exception as e:
-        print(f"Failed to tag file {key} as processed. Error: {str(e)}")
+kms_key_id = 'your-kms-key-id'
 
 def lambda_handler(event, context):
-    raw_key = None
-    try:
-        # Get the bucket and file key from the event
-        raw_bucket = event['Records'][0]['s3']['bucket']['name']
-        raw_key = event['Records'][0]['s3']['object']['key']
+    # Parse the S3 event
+    for record in event['Records']:
+        source_bucket = record['s3']['bucket']['name']
+        source_key = record['s3']['object']['key']
         
-        # Check if the object key starts with the allowed prefix
-        if not raw_key.startswith(raw_allowed_prefix):
-            raise ValueError(f"Object key {raw_key} does not start with the allowed prefix {raw_allowed_prefix}")
+        # Define target bucket and prefix
+        target_bucket = 'your-target-bucket'
+        source_prefix = 'your/source/prefix/'
+        target_prefix = 'your/target/prefix/'
         
-        # Check if the file has already been processed
-        if is_file_processed(raw_bucket, raw_key):
-            return {
-                'statusCode': 200,
-                'body': f"File {raw_key} has already been processed."
-            }
-        
-        # Download the raw file from the raw bucket
-        download_path = '/tmp/' + raw_key.split('/')[-1]
-        s3.download_file(raw_bucket, raw_key, download_path)
-        
-        # Determine the file extension
-        _, file_extension = os.path.splitext(download_path)
-        
-        # Read the raw file into a DataFrame
-        df = read_file(download_path, file_extension)
-        
-        # Remove spaces from column headers
-        df = remove_spaces_from_headers(df)
-        
-        # Convert the DataFrame to a Parquet file
-        table = pa.Table.from_pandas(df)
-        parquet_path = download_path.replace(file_extension, '.parquet')
-        pq.write_table(table, parquet_path)
-        
-        # Upload the Parquet file to the refined bucket
-        refined_bucket = 'refined-bucket'
-        refined_key = refined_prefix + raw_key[len(raw_allowed_prefix):].replace(file_extension, '.parquet')
-        s3.upload_file(parquet_path, refined_bucket, refined_key)
-        
-        # Copy the Parquet file to the consumption bucket with KMS encryption
-        consumption_bucket = 'consumption-bucket'
-        consumption_key = consumption_prefix + raw_key[len(raw_allowed_prefix):].replace(file_extension, '.parquet')
-        copy_source = {'Bucket': refined_bucket, 'Key': refined_key}
-        s3.copy(copy_source, consumption_bucket, consumption_key, ExtraArgs={'ServerSideEncryption': 'aws:kms', 'SSEKMSKeyId': kms_key_arn})
-        
-        # Clean up temporary files
-        os.remove(download_path)
-        os.remove(parquet_path)
-        
-        # Tag the raw file as processed
-        tag_file_as_processed(raw_bucket, raw_key)
-        
-        return {
-            'statusCode': 200,
-            'body': f"Successfully processed and moved {raw_key} to {consumption_bucket}"
-        }
+        # Only process CSV files
+        if source_key.endswith('.csv'):
+            copy_and_convert_file(source_bucket, source_key, target_bucket, source_prefix, target_prefix)
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Files processed successfully.')
+    }
+
+def copy_and_convert_file(source_bucket, source_key, target_bucket, source_prefix, target_prefix):
+    # Download CSV file from source S3 bucket
+    csv_obj = s3.get_object(Bucket=source_bucket, Key=source_key)
+    csv_data = csv_obj['Body'].read().decode('utf-8')
     
-    except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': f"Failed to process {raw_key if raw_key else 'unknown file'}. Error: {str(e)}"
-        }
+    # Convert CSV to Parquet
+    df = pd.read_csv(io.StringIO(csv_data))
+    table = pa.Table.from_pandas(df)
+    
+    # Write Parquet file to in-memory buffer
+    buffer = io.BytesIO()
+    pq.write_table(table, buffer)
+    buffer.seek(0)
+    
+    # Determine target key maintaining the folder structure
+    relative_key = source_key[len(source_prefix):]
+    target_key = target_prefix + relative_key.replace('.csv', '.parquet')
+
+    # Upload Parquet file to target S3 bucket with KMS encryption
+    s3.put_object(
+        Bucket=target_bucket,
+        Key=target_key,
+        Body=buffer.getvalue(),
+        ServerSideEncryption='aws:kms',
+        SSEKMSKeyId=kms_key_id
+    )
