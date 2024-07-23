@@ -7,8 +7,8 @@ import os
 # Initialize the S3 client
 s3 = boto3.client('s3')
 
-# Replace with your KMS Key ID for the consumption bucket
-kms_key_id = '1234abcd-12ab-34cd-56ef-1234567890ab'
+# Replace with your KMS Key ARN for the consumption bucket
+kms_key_arn = 'arn:aws:kms:us-east:343553:key/37377hd888383j-djj-djjd'
 
 # Define the allowed prefixes
 raw_allowed_prefix = 'data/raw/'
@@ -31,6 +31,35 @@ def read_file(file_path, file_extension):
     else:
         raise ValueError('Unsupported file type')
 
+# Function to check if a file has been processed
+def is_file_processed(bucket, key):
+    try:
+        response = s3.get_object_tagging(Bucket=bucket, Key=key)
+        for tag in response['TagSet']:
+            if tag['Key'] == 'processed' and tag['Value'] == 'true':
+                return True
+        return False
+    except Exception as e:
+        return False
+
+# Function to tag a file as processed
+def tag_file_as_processed(bucket, key):
+    try:
+        s3.put_object_tagging(
+            Bucket=bucket,
+            Key=key,
+            Tagging={
+                'TagSet': [
+                    {
+                        'Key': 'processed',
+                        'Value': 'true'
+                    }
+                ]
+            }
+        )
+    except Exception as e:
+        print(f"Failed to tag file {key} as processed. Error: {str(e)}")
+
 def lambda_handler(event, context):
     try:
         # Get the bucket and file key from the event
@@ -40,6 +69,13 @@ def lambda_handler(event, context):
         # Check if the object key starts with the allowed prefix
         if not raw_key.startswith(raw_allowed_prefix):
             raise ValueError(f"Object key {raw_key} does not start with the allowed prefix {raw_allowed_prefix}")
+        
+        # Check if the file has already been processed
+        if is_file_processed(raw_bucket, raw_key):
+            return {
+                'statusCode': 200,
+                'body': f"File {raw_key} has already been processed."
+            }
         
         # Download the raw file from the raw bucket
         download_path = '/tmp/' + raw_key.split('/')[-1]
@@ -68,11 +104,14 @@ def lambda_handler(event, context):
         consumption_bucket = 'consumption-bucket'
         consumption_key = consumption_prefix + raw_key[len(raw_allowed_prefix):].replace(file_extension, '.parquet')
         copy_source = {'Bucket': refined_bucket, 'Key': refined_key}
-        s3.copy(copy_source, consumption_bucket, consumption_key, ExtraArgs={'ServerSideEncryption': 'aws:kms', 'SSEKMSKeyId': kms_key_id})
+        s3.copy(copy_source, consumption_bucket, consumption_key, ExtraArgs={'ServerSideEncryption': 'aws:kms', 'SSEKMSKeyId': kms_key_arn})
         
         # Clean up temporary files
         os.remove(download_path)
         os.remove(parquet_path)
+        
+        # Tag the raw file as processed
+        tag_file_as_processed(raw_bucket, raw_key)
         
         return {
             'statusCode': 200,
