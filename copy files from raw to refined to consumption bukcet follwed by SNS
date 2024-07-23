@@ -1,0 +1,109 @@
+# copy files from raw to refined to consumption bukcet follwed by SNS
+import boto3
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import os
+
+s3 = boto3.client('s3')
+sns = boto3.client('sns')
+
+# Replace with your KMS Key ID for the consumption bucket
+kms_key_id = 'your-kms-key-id'
+
+# Define the allowed prefixes
+raw_allowed_prefix = 'your/raw/allowed/prefix/'
+refined_prefix = 'your/refined/prefix/'
+consumption_prefix = 'your/consumption/prefix/'
+
+def remove_spaces_from_headers(df):
+    df.columns = df.columns.str.replace(' ', '_')
+    return df
+
+def read_file(file_path, file_extension):
+    if file_extension == '.csv':
+        return pd.read_csv(file_path)
+    elif file_extension in ['.xls', '.xlsx']:
+        return pd.read_excel(file_path)
+    elif file_extension == '.txt':
+        return pd.read_csv(file_path, delimiter='\t')
+    else:
+        raise ValueError('Unsupported file type')
+
+def send_sns_notification(message, subject, topic_arn):
+    response = sns.publish(
+        TopicArn=topic_arn,
+        Message=message,
+        Subject=subject
+    )
+    return response
+
+def lambda_handler(event, context):
+    try:
+        # Get the bucket and file key from the event
+        raw_bucket = event['Records'][0]['s3']['bucket']['name']
+        raw_key = event['Records'][0]['s3']['object']['key']
+        
+        # Check if the object key starts with the allowed prefix
+        if not raw_key.startswith(raw_allowed_prefix):
+            raise ValueError(f"Object key {raw_key} does not start with the allowed prefix {raw_allowed_prefix}")
+        
+        # Download the raw file
+        download_path = '/tmp/' + raw_key.split('/')[-1]
+        s3.download_file(raw_bucket, raw_key, download_path)
+        
+        # Determine the file extension
+        _, file_extension = os.path.splitext(download_path)
+        
+        # Read the raw file into a DataFrame
+        df = read_file(download_path, file_extension)
+        
+        # Remove spaces from column headers
+        df = remove_spaces_from_headers(df)
+        
+        # Convert DataFrame to Parquet
+        table = pa.Table.from_pandas(df)
+        parquet_path = download_path.replace(file_extension, '.parquet')
+        pq.write_table(table, parquet_path)
+        
+        # Upload the Parquet file to the refined bucket
+        refined_bucket = 'refined-bucket'
+        refined_key = refined_prefix + raw_key[len(raw_allowed_prefix):].replace(file_extension, '.parquet')
+        s3.upload_file(parquet_path, refined_bucket, refined_key)
+        
+        # Move the Parquet file to the consumption bucket with KMS encryption
+        consumption_bucket = 'consumption-bucket'
+        consumption_key = consumption_prefix + raw_key[len(raw_allowed_prefix):].replace(file_extension, '.parquet')
+        copy_source = {'Bucket': refined_bucket, 'Key': refined_key}
+        s3.copy(copy_source, consumption_bucket, consumption_key, ExtraArgs={'ServerSideEncryption': 'aws:kms', 'SSEKMSKeyId': kms_key_id})
+        
+        # Clean up temporary files
+        os.remove(download_path)
+        os.remove(parquet_path)
+        
+        # Get the SNS topic ARN from environment variables
+        sns_topic_arn = os.environ['SNS_TOPIC_ARN']
+        
+        # Send SNS notification
+        message = f"Successfully processed and moved {raw_key} to {consumption_bucket}"
+        subject = "S3 File Processing Notification"
+        send_sns_notification(message, subject, sns_topic_arn)
+        
+        return {
+            'statusCode': 200,
+            'body': message
+        }
+    
+    except Exception as e:
+        # Get the SNS topic ARN from environment variables
+        sns_topic_arn = os.environ['SNS_TOPIC_ARN']
+        
+        # Send failure notification
+        message = f"Failed to process {raw_key}. Error: {str(e)}"
+        subject = "S3 File Processing Error"
+        send_sns_notification(message, subject, sns_topic_arn)
+        
+        return {
+            'statusCode': 500,
+            'body': message
+        }
