@@ -38,20 +38,27 @@ def list_objects(bucket, prefix):
                 objects[obj['Key']] = obj['LastModified']
     return objects
 
-def convert_csv_to_parquet_streaming(csv_obj):
-    """Converts CSV content to Parquet format using streaming."""
-    chunksize = 10 ** 6  # Define a suitable chunk size
-    parquet_buffer = io.BytesIO()
-    first_chunk = True
+def read_text_file(file_obj):
+    """Reads a text file and handles encoding issues."""
+    try:
+        return pd.read_csv(file_obj, delimiter='\t', encoding='utf-8')
+    except UnicodeDecodeError:
+        file_obj.seek(0)  # Reset the buffer
+        return pd.read_csv(file_obj, delimiter='\t', encoding='ISO-8859-1')
 
-    for chunk in pd.read_csv(csv_obj, chunksize=chunksize):
-        if first_chunk:
-            chunk.to_parquet(parquet_buffer, engine='pyarrow', index=False)
-            first_chunk = False
-        else:
-            table = pa.Table.from_pandas(chunk)
-            pq.write_table(table, parquet_buffer)
+def convert_file_to_parquet(file_obj, file_type):
+    """Converts file content to Parquet format based on file type."""
+    if file_type == 'csv':
+        df = pd.read_csv(file_obj)
+    elif file_type == 'txt':
+        df = read_text_file(file_obj)
+    elif file_type == 'xlsx':
+        df = pd.read_excel(file_obj)
+    else:
+        raise ValueError(f"Unsupported file type: {file_type}")
     
+    parquet_buffer = io.BytesIO()
+    df.to_parquet(parquet_buffer, engine='pyarrow', index=False)
     parquet_buffer.seek(0)
     return parquet_buffer
 
@@ -65,11 +72,12 @@ def lambda_handler(event, context):
         target_objects = list_objects(target_bucket, target_prefix)
 
         for source_key, source_last_modified in source_objects.items():
-            if not source_key.endswith('.csv'):
-                continue  # Skip non-CSV files
+            if not (source_key.endswith('.csv') or source_key.endswith('.txt') or source_key.endswith('.xlsx')):
+                continue  # Skip unsupported file types
 
             relative_path = source_key[len(source_prefix):]
-            file_name = os.path.basename(source_key).replace('.csv', '.parquet')
+            file_extension = os.path.splitext(source_key)[1]
+            file_name = os.path.basename(source_key).replace(file_extension, '.parquet')
             sub_prefix = os.path.join(target_prefix, os.path.dirname(relative_path))
             target_key = os.path.join(sub_prefix, file_name)
 
@@ -80,18 +88,18 @@ def lambda_handler(event, context):
                     logger.info(f"Skipping {source_key} as it is not modified since last copy")
                     continue
 
-            # Get the CSV content from the source S3 bucket
+            # Get the file content from the source S3 bucket
             try:
-                csv_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)['Body']
+                file_obj = s3_client.get_object(Bucket=source_bucket, Key=source_key)['Body']
             except Exception as e:
                 logger.error(f"Error getting object {source_key} from bucket {source_bucket}: {e}")
                 continue
 
-            # Convert CSV to Parquet using streaming
+            # Convert file to Parquet
             try:
-                parquet_buffer = convert_csv_to_parquet_streaming(csv_obj)
+                parquet_buffer = convert_file_to_parquet(file_obj, file_extension[1:])
             except Exception as e:
-                logger.error(f"Error converting CSV to Parquet for object {source_key}: {e}")
+                logger.error(f"Error converting {file_extension} to Parquet for object {source_key}: {e}")
                 continue
 
             # Upload the Parquet file to the target S3 bucket with KMS encryption
