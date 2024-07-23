@@ -1,0 +1,46 @@
+import boto3
+
+def lambda_handler(event, context):
+    glue_client = boto3.client('glue')
+    
+    # Define your database name
+    database_name = 'your_database'
+    
+    # Get the list of tables in the database
+    tables = glue_client.get_tables(DatabaseName=database_name)['TableList']
+    
+    # Iterate over each table and update the S3 location
+    for table in tables:
+        table_name = table['Name']
+        s3_location = table['StorageDescriptor']['Location']
+        
+        # Parse the correct path
+        corrected_s3_location = '/'.join(s3_location.split('/')[:-1]) + '/'
+        
+        # Update the table metadata
+        table['StorageDescriptor']['Location'] = corrected_s3_location
+        
+        # Update the table in the Glue Data Catalog
+        glue_client.update_table(
+            DatabaseName=database_name,
+            TableInput={
+                'Name': table_name,
+                'StorageDescriptor': table['StorageDescriptor'],
+                'TableType': table['TableType'],
+                'Owner': table.get('Owner', ''),
+                'Parameters': table.get('Parameters', {}),
+                'Retention': table.get('Retention', 0),
+                'PartitionKeys': table.get('PartitionKeys', []),
+                'LastAccessTime': table.get('LastAccessTime', None),
+                'LastAnalyzedTime': table.get('LastAnalyzedTime', None),
+                'ViewOriginalText': table.get('ViewOriginalText', ''),
+                'ViewExpandedText': table.get('ViewExpandedText', ''),
+                'TableVersion': table.get('TableVersion', ''),
+                'CatalogId': table.get('CatalogId', '')
+            }
+        )
+    
+    return {
+        'statusCode': 200,
+        'body': 'Successfully updated S3 locations for all tables in the database'
+    }
