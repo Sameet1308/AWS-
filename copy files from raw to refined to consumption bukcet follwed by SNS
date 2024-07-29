@@ -3,6 +3,7 @@ import os
 import logging
 import pandas as pd
 import io
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 # Initialize S3 client
@@ -38,29 +39,58 @@ def list_objects(bucket, prefix):
                 objects[obj['Key']] = obj['LastModified']
     return objects
 
-def read_text_file(file_obj):
-    """Reads a text file and handles encoding issues."""
-    try:
-        return pd.read_csv(file_obj, delimiter='\t', encoding='utf-8')
-    except UnicodeDecodeError:
-        file_obj.seek(0)  # Reset the buffer
-        return pd.read_csv(file_obj, delimiter='\t', encoding='ISO-8859-1')
+def convert_csv_to_parquet(file_obj):
+    """Converts a CSV file to Parquet format in chunks."""
+    parquet_buffer = io.BytesIO()
+    writer = None
 
-def convert_file_to_parquet(file_obj, file_type):
-    """Converts file content to Parquet format based on file type."""
-    if file_type == 'csv':
-        df = pd.read_csv(file_obj)
-    elif file_type == 'txt':
-        df = read_text_file(file_obj)
-    elif file_type == 'xlsx':
-        df = pd.read_excel(file_obj)
-    else:
-        raise ValueError(f"Unsupported file type: {file_type}")
-    
+    for chunk in pd.read_csv(file_obj, chunksize=100000):
+        table = pa.Table.from_pandas(chunk)
+        if writer is None:
+            writer = pq.ParquetWriter(parquet_buffer, table.schema)
+        writer.write_table(table)
+
+    if writer:
+        writer.close()
+
+    parquet_buffer.seek(0)
+    return parquet_buffer
+
+def convert_text_to_parquet(file_obj):
+    """Converts a text file to Parquet format in chunks."""
+    parquet_buffer = io.BytesIO()
+    writer = None
+
+    for chunk in pd.read_csv(file_obj, delimiter='\t', encoding='utf-8', chunksize=100000):
+        table = pa.Table.from_pandas(chunk)
+        if writer is None:
+            writer = pq.ParquetWriter(parquet_buffer, table.schema)
+        writer.write_table(table)
+
+    if writer:
+        writer.close()
+
+    parquet_buffer.seek(0)
+    return parquet_buffer
+
+def convert_excel_to_parquet(file_obj):
+    """Converts an Excel file to Parquet format."""
+    df = pd.read_excel(file_obj)
     parquet_buffer = io.BytesIO()
     df.to_parquet(parquet_buffer, engine='pyarrow', index=False)
     parquet_buffer.seek(0)
     return parquet_buffer
+
+def convert_file_to_parquet(file_obj, file_type):
+    """Converts file content to Parquet format based on file type."""
+    if file_type == 'csv':
+        return convert_csv_to_parquet(file_obj)
+    elif file_type == 'txt':
+        return convert_text_to_parquet(file_obj)
+    elif file_type == 'xlsx':
+        return convert_excel_to_parquet(file_obj)
+    else:
+        raise ValueError(f"Unsupported file type: {file_type}")
 
 def lambda_handler(event, context):
     source_bucket, source_prefix = parse_s3_uri(SOURCE_S3_URI)
