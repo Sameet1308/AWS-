@@ -1,0 +1,98 @@
+import boto3
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import io
+import json
+from datetime import datetime, timezone
+
+s3 = boto3.client('s3')
+
+# Configuration
+LAST_EXECUTION_FILE = 'your-bucket/last_execution.json'
+source_prefix = 'source-bucket/raw-data/'
+target_prefix = 'target-bucket/consumption-data/'
+kms_key_id = 'arn:aws:kms:us-east-1:123456789012:key/abcd-efgh-ijkl-mnop'
+
+def get_last_execution_time():
+    try:
+        response = s3.get_object(Bucket=LAST_EXECUTION_FILE.split('/')[0], Key='/'.join(LAST_EXECUTION_FILE.split('/')[1:]))
+        last_execution = json.loads(response['Body'].read())
+        return datetime.fromisoformat(last_execution['last_execution_time'])
+    except s3.exceptions.NoSuchKey:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+def update_last_execution_time():
+    last_execution = {'last_execution_time': datetime.now(timezone.utc).isoformat()}
+    s3.put_object(Bucket=LAST_EXECUTION_FILE.split('/')[0], Key='/'.join(LAST_EXECUTION_FILE.split('/')[1:]), Body=json.dumps(last_execution))
+
+def lambda_handler(event, context):
+    last_execution_time = get_last_execution_time()
+    
+    # List objects in the source prefix
+    source_bucket = source_prefix.split('/')[0]
+    source_path = '/'.join(source_prefix.split('/')[1:])
+    response = s3.list_objects_v2(Bucket=source_bucket, Prefix=source_path)
+    files = response.get('Contents', [])
+
+    for file in files:
+        source_key = file['Key']
+        last_modified = file['LastModified']
+
+        # Process only new or modified files
+        if last_modified <= last_execution_time:
+            continue
+
+        # Check if the file is already in Parquet format
+        if source_key.endswith('.parquet'):
+            # Define the target key
+            target_bucket = target_prefix.split('/')[0]
+            target_path = '/'.join(target_prefix.split('/')[1:])
+            target_key = f"{target_path}/{source_key.split('/', 1)[1]}"
+
+            # Copy the Parquet file directly to the target S3 bucket with KMS encryption
+            s3.copy_object(
+                Bucket=target_bucket,
+                CopySource={'Bucket': source_bucket, 'Key': source_key},
+                Key=target_key,
+                ServerSideEncryption='aws:kms',
+                SSEKMSKeyId=kms_key_id
+            )
+            continue
+
+        # Download the file from S3
+        response = s3.get_object(Bucket=source_bucket, Key=source_key)
+        file_content = response['Body'].read().decode('utf-8')
+
+        # Determine the file type and read it into a DataFrame
+        if source_key.endswith('.csv'):
+            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter=',')
+        elif source_key.endswith('.txt'):
+            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter='\t')
+        else:
+            continue  # Skip unsupported file types
+
+        # Convert DataFrame to Parquet format with Snappy compression
+        table = pa.Table.from_pandas(df)
+        output = io.BytesIO()
+        pq.write_table(table, output, compression='SNAPPY')
+
+        # Define the target key
+        target_key = f"{target_path}/{source_key.split('/', 1)[1].replace('.csv', '.parquet').replace('.txt', '.parquet')}"
+
+        # Upload the Parquet file to the target S3 bucket with KMS encryption
+        s3.put_object(
+            Bucket=target_bucket,
+            Key=target_key,
+            Body=output.getvalue(),
+            ServerSideEncryption='aws:kms',
+            SSEKMSKeyId=kms_key_id
+        )
+
+    # Update the last execution time
+    update_last_execution_time()
+
+    return {
+        'statusCode': 200,
+        'body': f'Successfully processed files from {source_prefix} to {target_prefix}'
+    }
