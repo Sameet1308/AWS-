@@ -10,8 +10,8 @@ s3 = boto3.client('s3')
 
 # Configuration
 LAST_EXECUTION_FILE = 's3://parent-prefix/your-prefix/last_execution.json'
-source_prefix = 's3://source-bucket/raw-data/'
-target_prefix = 's3://target-bucket/consumption-data/'
+source_prefix = 's3://source-bucket/raw-data/'  # Include full S3 path
+target_prefix = 's3://target-bucket/consumption-data/'  # Include full S3 path
 kms_key_id = 'arn:aws:kms:us-east-1:123456789012:key/abcd-efgh-ijkl-mnop'
 
 def get_last_execution_time():
@@ -71,9 +71,9 @@ def lambda_handler(event, context):
 
         # Determine the file type and read it into a DataFrame
         if source_key.endswith('.csv'):
-            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter=',', encoding='utf-8', error_bad_lines=False)
+            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter=',', encoding='utf-8', on_bad_lines='skip')
         elif source_key.endswith('.txt'):
-            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter='\t', encoding='utf-8', error_bad_lines=False)
+            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter='\t', encoding='utf-8', on_bad_lines='skip')
         else:
             continue  # Skip unsupported file types
 
