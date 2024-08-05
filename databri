@@ -1,0 +1,27 @@
+# Import necessary libraries
+from pyspark.sql import SparkSession
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("S3ConsumptionReader").getOrCreate()
+
+# Input variable for S3 consumption prefix
+consumption_prefix = "s3a://your-s3-bucket/your-consumption-prefix/"
+
+# List files in the consumption prefix
+files = dbutils.fs.ls(consumption_prefix)
+
+# Display the list of files
+for file in files:
+    print(file.name)
+
+# Function to read a CSV file from the S3 consumption prefix
+def read_csv_from_s3(file_path):
+    df = spark.read.csv(file_path, header=True, inferSchema=True)
+    return df
+
+# Example usage: Read a specific file
+example_file = f"{consumption_prefix}your-file.csv"
+df = read_csv_from_s3(example_file)
+
+# Display the DataFrame
+df.show()
