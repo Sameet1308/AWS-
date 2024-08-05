@@ -9,29 +9,30 @@ from datetime import datetime, timezone
 s3 = boto3.client('s3')
 
 # Configuration
-LAST_EXECUTION_FILE = 'parent-prefix/your-prefix/last_execution.json'
-source_prefix = 's3://source-bucket/raw-data/'  # Include full S3 path
-target_prefix = 's3://target-bucket/consumption-data/'  # Include full S3 path
+LAST_EXECUTION_FILE = 's3://parent-prefix/your-prefix/last_execution.json'
+source_prefix = 's3://source-bucket/raw-data/'
+target_prefix = 's3://target-bucket/consumption-data/'
 kms_key_id = 'arn:aws:kms:us-east-1:123456789012:key/abcd-efgh-ijkl-mnop'
 
 def get_last_execution_time():
+    bucket, key = LAST_EXECUTION_FILE.replace("s3://", "").split("/", 1)
     try:
-        response = s3.get_object(Bucket=source_prefix.split('/')[2], Key='/'.join(source_prefix.split('/')[3:]) + LAST_EXECUTION_FILE)
+        response = s3.get_object(Bucket=bucket, Key=key)
         last_execution = json.loads(response['Body'].read())
         return datetime.fromisoformat(last_execution['last_execution_time'])
     except s3.exceptions.NoSuchKey:
         return datetime.min.replace(tzinfo=timezone.utc)
 
 def update_last_execution_time():
+    bucket, key = LAST_EXECUTION_FILE.replace("s3://", "").split("/", 1)
     last_execution = {'last_execution_time': datetime.now(timezone.utc).isoformat()}
-    s3.put_object(Bucket=source_prefix.split('/')[2], Key='/'.join(source_prefix.split('/')[3:]) + LAST_EXECUTION_FILE, Body=json.dumps(last_execution))
+    s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(last_execution))
 
 def lambda_handler(event, context):
     last_execution_time = get_last_execution_time()
     
     # List objects in the source prefix
-    source_bucket = source_prefix.split('/')[2]
-    source_path = '/'.join(source_prefix.split('/')[3:])
+    source_bucket, source_path = source_prefix.replace("s3://", "").split("/", 1)
     response = s3.list_objects_v2(Bucket=source_bucket, Prefix=source_path)
     files = response.get('Contents', [])
 
@@ -46,8 +47,7 @@ def lambda_handler(event, context):
         # Check if the file is already in Parquet format
         if source_key.endswith('.parquet'):
             # Define the target key
-            target_bucket = target_prefix.split('/')[2]
-            target_path = '/'.join(target_prefix.split('/')[3:])
+            target_bucket, target_path = target_prefix.replace("s3://", "").split("/", 1)
             target_key = f"{target_path}/{source_key.split('/', 1)[1]}"
 
             # Copy the Parquet file directly to the target S3 bucket with KMS encryption
@@ -62,13 +62,18 @@ def lambda_handler(event, context):
 
         # Download the file from S3
         response = s3.get_object(Bucket=source_bucket, Key=source_key)
-        file_content = response['Body'].read().decode('utf-8')
+        
+        # Read the file content with error handling for decoding
+        try:
+            file_content = response['Body'].read().decode('utf-8')
+        except UnicodeDecodeError:
+            file_content = response['Body'].read().decode('latin1')
 
         # Determine the file type and read it into a DataFrame
         if source_key.endswith('.csv'):
-            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter=',')
+            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter=',', encoding='utf-8', error_bad_lines=False)
         elif source_key.endswith('.txt'):
-            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter='\t')
+            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter='\t', encoding='utf-8', error_bad_lines=False)
         else:
             continue  # Skip unsupported file types
 
