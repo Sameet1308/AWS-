@@ -70,12 +70,21 @@ def lambda_handler(event, context):
             file_content = response['Body'].read().decode('latin1')
 
         # Determine the file type and read it into a DataFrame
-        if source_key.endswith('.csv'):
-            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter=',', encoding='utf-8', on_bad_lines='skip')
-        elif source_key.endswith('.txt'):
-            df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter='\t', encoding='utf-8', on_bad_lines='skip')
-        else:
-            continue  # Skip unsupported file types
+        try:
+            if source_key.endswith('.csv'):
+                df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter=',', encoding='utf-8', on_bad_lines='skip')
+            elif source_key.endswith('.txt'):
+                df = pd.read_csv(io.StringIO(file_content), quotechar='"', delimiter='~', encoding='utf-8', on_bad_lines='skip')
+            else:
+                continue  # Skip unsupported file types
+        except pd.errors.EmptyDataError:
+            print(f"No columns to parse from file: {source_key}")
+            continue
+
+        # Ensure the DataFrame is not empty
+        if df.empty:
+            print(f"Empty DataFrame after parsing file: {source_key}")
+            continue
 
         # Convert DataFrame to Parquet format with Snappy compression
         table = pa.Table.from_pandas(df)
