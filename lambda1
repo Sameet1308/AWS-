@@ -3,7 +3,6 @@ import boto3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import chardet
 
 s3 = boto3.client('s3')
 
@@ -42,19 +41,16 @@ def lambda_handler(event, context):
     obj = s3.get_object(Bucket=source_bucket, Key=source_key)
     file_content = obj['Body'].read()
     
-    # Detect encoding
-    encoding = chardet.detect(file_content)['encoding']
-    
-    # Convert txt content to DataFrame
+    # Try to read the TXT file with different encodings
     from io import StringIO
-    data = StringIO(file_content.decode(encoding))
+    data = StringIO(file_content.decode('utf-8', errors='ignore'))
     
-    # Try to read the CSV with the detected encoding
     try:
-        df = pd.read_csv(data, delimiter='~', encoding=encoding, error_bad_lines=False)
-    except Exception as e:
-        print(f"Error reading CSV with encoding {encoding}: {e}")
-        return
+        df = pd.read_csv(data, delimiter='~', encoding='utf-8', error_bad_lines=False)
+    except UnicodeDecodeError:
+        print("UTF-8 decoding failed, trying ISO-8859-1 encoding")
+        data = StringIO(file_content.decode('ISO-8859-1'))
+        df = pd.read_csv(data, delimiter='~', encoding='ISO-8859-1', error_bad_lines=False)
 
     # Convert DataFrame to Parquet format
     table = pa.Table.from_pandas(df)
