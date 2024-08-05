@@ -52,6 +52,9 @@ def lambda_handler(event, context):
         data = StringIO(file_content.decode('ISO-8859-1'))
         df = pd.read_csv(data, delimiter='~', encoding='ISO-8859-1', on_bad_lines='skip')
 
+    # Check DataFrame content
+    print(df.head())
+
     # Convert DataFrame to Parquet format
     table = pa.Table.from_pandas(df)
     parquet_buffer = pa.BufferOutputStream()
