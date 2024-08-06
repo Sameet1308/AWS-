@@ -1,0 +1,79 @@
+import json
+import boto3
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from io import StringIO
+
+s3 = boto3.client('s3')
+
+# Define the input variables
+source_prefix = 's3://source-bucket-name/source/prefix/'
+target_prefix = 's3://target-bucket-name/target/prefix/'
+target_kms_key_id = 'your-target-kms-key-id'
+
+def lambda_handler(event, context):
+    # Parse bucket and prefix from the source prefix
+    source_bucket = source_prefix.split('/')[2]
+    source_prefix_path = '/'.join(source_prefix.split('/')[3:])
+    
+    # Parse bucket and prefix from the target prefix
+    target_bucket = target_prefix.split('/')[2]
+    target_prefix_path = '/'.join(target_prefix.split('/')[3:])
+
+    # List objects in the source bucket with the given prefix
+    response = s3.list_objects_v2(Bucket=source_bucket, Prefix=source_prefix_path)
+    objects = response.get('Contents', [])
+    
+    if not objects:
+        print("No files found in the source prefix.")
+        return
+
+    # Filter and find the latest modified .txt file
+    txt_files = [obj for obj in objects if obj['Key'].endswith('.txt')]
+    if not txt_files:
+        print("No .txt files found in the source prefix.")
+        return
+
+    latest_file = max(txt_files, key=lambda x: x['LastModified'])
+
+    # Read the content of the latest file
+    source_key = latest_file['Key']
+    obj = s3.get_object(Bucket=source_bucket, Key=source_key)
+    file_content = obj['Body'].read()
+    
+    # Try to read the TXT file with different encodings
+    data = StringIO(file_content.decode('utf-8', errors='ignore'))
+    
+    try:
+        df = pd.read_csv(data, delimiter='~', encoding='utf-8', on_bad_lines='skip')
+    except UnicodeDecodeError:
+        print("UTF-8 decoding failed, trying ISO-8859-1 encoding")
+        data = StringIO(file_content.decode('ISO-8859-1'))
+        df = pd.read_csv(data, delimiter='~', encoding='ISO-8859-1', on_bad_lines='skip')
+
+    # Check DataFrame content
+    print(df.head())
+
+    # Convert DataFrame to Parquet format
+    table = pa.Table.from_pandas(df)
+    parquet_buffer = pa.BufferOutputStream()
+    pq.write_table(table, parquet_buffer, compression='SNAPPY')
+
+    # Create target key, preserving folder structure
+    target_key = target_prefix_path + source_key[len(source_prefix_path):].replace('.txt', '.parquet')
+    
+    # Copy the file to the target bucket with KMS encryption
+    s3.put_object(
+        Bucket=target_bucket,
+        Key=target_key,
+        Body=parquet_buffer.getvalue().to_pybytes(),
+        ServerSideEncryption='aws:kms',
+        SSEKMSKeyId=target_kms_key_id
+    )
+
+    print(f"File {source_key} copied to {target_key} in Parquet format with Snappy compression.")
+
+# Example to test the function locally
+if __name__ == "__main__":
+    lambda_handler(None, None)
