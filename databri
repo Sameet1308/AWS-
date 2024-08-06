@@ -1,27 +1,123 @@
 # Import necessary libraries
 from pyspark.sql import SparkSession
+import boto3
+import logging
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize Spark session
-spark = SparkSession.builder.appName("S3ConsumptionReader").getOrCreate()
+spark = SparkSession.builder.appName("ParquetReader").getOrCreate()
 
-# Input variable for S3 consumption prefix
+# Input variables
 consumption_prefix = "s3a://your-s3-bucket/your-consumption-prefix/"
+aws_account_id = "your-aws-account-id"
+db_name = "your-db-name"
+region_name = "your-region-name"  # e.g., 'us-east-1'
 
 # List files in the consumption prefix
 files = dbutils.fs.ls(consumption_prefix)
 
-# Display the list of files
+# Function to read Parquet files from S3 consumption prefix
+def read_parquet_from_s3(file_path):
+    try:
+        df = spark.read.parquet(file_path)
+        return df
+    except Exception as e:
+        logger.error(f"Error reading Parquet file {file_path}: {e}")
+        return None
+
+# Initialize AWS Glue client
+glue_client = boto3.client('glue', region_name=region_name)
+
+# Function to get existing table schema from Glue
+def get_glue_table_schema(db_name, table_name):
+    try:
+        response = glue_client.get_table(DatabaseName=db_name, Name=table_name)
+        columns = response['Table']['StorageDescriptor']['Columns']
+        return {col['Name']: col['Type'] for col in columns}
+    except glue_client.exceptions.EntityNotFoundException:
+        return None
+    except Exception as e:
+        logger.error(f"Error retrieving schema for table {table_name}: {e}")
+        return None
+
+# Function to create or update Glue table
+def create_or_update_glue_table(df, table_name, db_name):
+    new_columns = [{"Name": col, "Type": df.schema[col].dataType.simpleString()} for col in df.columns]
+    new_schema = {col['Name']: col['Type'] for col in new_columns}
+    
+    existing_schema = get_glue_table_schema(db_name, table_name)
+    
+    if existing_schema:
+        # Compare schemas
+        if existing_schema == new_schema:
+            logger.info(f"Table {table_name} already exists with the same schema. Skipping creation.")
+            return
+        else:
+            # Update table schema if there are changes
+            logger.info(f"Updating schema for table {table_name}.")
+            table_input = {
+                'Name': table_name,
+                'StorageDescriptor': {
+                    'Columns': new_columns,
+                    'Location': f"s3://{aws_account_id}/{db_name}/{table_name}",
+                    'InputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',
+                    'OutputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
+                    'Compressed': False,
+                    'SerdeInfo': {
+                        'SerializationLibrary': 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe',
+                        'Parameters': {'serialization.format': '1'}
+                    },
+                    'StoredAsSubDirectories': False
+                },
+                'TableType': 'EXTERNAL_TABLE',
+            }
+            try:
+                glue_client.update_table(
+                    DatabaseName=db_name,
+                    TableInput=table_input
+                )
+                logger.info(f"Table {table_name} schema updated successfully.")
+            except Exception as e:
+                logger.error(f"Error updating table schema for {table_name}: {e}")
+    else:
+        # Create new table
+        logger.info(f"Creating new table {table_name}.")
+        table_input = {
+            'Name': table_name,
+            'StorageDescriptor': {
+                'Columns': new_columns,
+                'Location': f"s3://{aws_account_id}/{db_name}/{table_name}",
+                'InputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',
+                'OutputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
+                'Compressed': False,
+                'SerdeInfo': {
+                    'SerializationLibrary': 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe',
+                    'Parameters': {'serialization.format': '1'}
+                },
+                'StoredAsSubDirectories': False
+            },
+            'TableType': 'EXTERNAL_TABLE',
+        }
+        try:
+            glue_client.create_table(
+                DatabaseName=db_name,
+                TableInput=table_input
+            )
+            logger.info(f"Table {table_name} created successfully in database {db_name}.")
+        except Exception as e:
+            logger.error(f"Error creating table {table_name}: {e}")
+
+# Process each Parquet file
 for file in files:
-    print(file.name)
-
-# Function to read a CSV file from the S3 consumption prefix
-def read_csv_from_s3(file_path):
-    df = spark.read.csv(file_path, header=True, inferSchema=True)
-    return df
-
-# Example usage: Read a specific file
-example_file = f"{consumption_prefix}your-file.csv"
-df = read_csv_from_s3(example_file)
-
-# Display the DataFrame
-df.show()
+    if file.name.endswith(".parquet"):
+        file_path = file.path
+        table_name = file.name.replace('.parquet', '')  # Table name derived from file name
+        
+        # Read Parquet file
+        df = read_parquet_from_s3(file_path)
+        if df is not None:
+            # Create or update Glue table
+            create_or_update_glue_table(df, table_name, db_name)
