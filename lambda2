@@ -25,30 +25,6 @@ def lambda_handler(event, context):
     
     for file_obj in parquet_files:
         file_key = file_obj['Key']
-        last_modified = file_obj['LastModified']
-        
-        # Check if the table already exists
-        table_name = file_key.split('/')[-1].replace('.parquet', '')
-        table_exists = False
-        try:
-            response = glue_client.get_table(DatabaseName=target_database_name, Name=table_name)
-            table_exists = True
-        except glue_client.exceptions.EntityNotFoundException:
-            table_exists = False
-        
-        if table_exists:
-            # Check if the file is updated
-            table = response['Table']
-            table_location = table['StorageDescriptor']['Location']
-            
-            # Extract the last modified date from the existing table location
-            existing_file_key = table_location.split(f"s3://{source_bucket}/")[-1]
-            existing_file_obj = s3_client.head_object(Bucket=source_bucket, Key=existing_file_key)
-            existing_last_modified = existing_file_obj['LastModified']
-            
-            # If the file has not been updated, skip to the next file
-            if last_modified <= existing_last_modified:
-                continue
         
         # Read the Parquet file
         obj = s3_client.get_object(Bucket=source_bucket, Key=file_key)
@@ -77,6 +53,7 @@ def lambda_handler(event, context):
             columns.append({'Name': col_name, 'Type': glue_type})
         
         # Create or update Glue table
+        table_name = file_key.split('/')[-1].replace('.parquet', '')
         table_input = {
             'Name': table_name,
             'StorageDescriptor': {
@@ -93,10 +70,10 @@ def lambda_handler(event, context):
             'TableType': 'EXTERNAL_TABLE'
         }
         
-        if table_exists:
-            glue_client.update_table(DatabaseName=target_database_name, TableInput=table_input)
-        else:
+        try:
             glue_client.create_table(DatabaseName=target_database_name, TableInput=table_input)
+        except glue_client.exceptions.AlreadyExistsException:
+            glue_client.update_table(DatabaseName=target_database_name, TableInput=table_input)
     
     return {
         'statusCode': 200,
