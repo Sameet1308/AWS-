@@ -4,15 +4,26 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from io import StringIO
+from datetime import datetime
 
 s3 = boto3.client('s3')
+ssm = boto3.client('ssm')
 
 # Define the input variables
 source_prefix = 's3://source-bucket-name/source/prefix/'
 target_prefix = 's3://target-bucket-name/target/prefix/'
 target_kms_key_id = 'your-target-kms-key-id'
+last_processed_param = 'last-processed-timestamp'  # SSM Parameter name to store the last processed time
 
 def lambda_handler(event, context):
+    # Get the last processed time from SSM Parameter Store
+    try:
+        response = ssm.get_parameter(Name=last_processed_param)
+        last_processed_time = response['Parameter']['Value']
+        last_processed_time = datetime.fromisoformat(last_processed_time)
+    except ssm.exceptions.ParameterNotFound:
+        last_processed_time = None
+
     # Parse bucket and prefix from the source prefix
     source_bucket = source_prefix.split('/')[2]
     source_prefix_path = '/'.join(source_prefix.split('/')[3:])
@@ -29,10 +40,10 @@ def lambda_handler(event, context):
         print("No files found in the source prefix.")
         return
 
-    # Filter and find the latest modified .txt file
-    txt_files = [obj for obj in objects if obj['Key'].endswith('.txt')]
+    # Filter and find the latest modified .txt file that is new or updated
+    txt_files = [obj for obj in objects if obj['Key'].endswith('.txt') and (last_processed_time is None or obj['LastModified'] > last_processed_time)]
     if not txt_files:
-        print("No .txt files found in the source prefix.")
+        print("No new or updated .txt files found in the source prefix.")
         return
 
     latest_file = max(txt_files, key=lambda x: x['LastModified'])
@@ -73,6 +84,11 @@ def lambda_handler(event, context):
     )
 
     print(f"File {source_key} copied to {target_key} in Parquet format with Snappy compression.")
+
+    # Update the last processed time in SSM Parameter Store
+    new_processed_time = latest_file['LastModified'].isoformat()
+    ssm.put_parameter(Name=last_processed_param, Value=new_processed_time, Type='String', Overwrite=True)
+    print(f"Updated last processed time to {new_processed_time}")
 
 # Example to test the function locally
 if __name__ == "__main__":
