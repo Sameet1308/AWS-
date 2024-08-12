@@ -1,140 +1,104 @@
 import boto3
+import pandas as pd
+import pyarrow.parquet as pq
+import io
 import json
-from datetime import datetime, timezone
-from pyarrow import parquet as pq
-import os
-
-s3_client = boto3.client('s3')
-glue_client = boto3.client('glue')
-
-# Define variables directly in the code
-TARGET_ACCOUNT_ID = '17272'
-DATABASE_NAME = 'yehjzjkksks'
-CONSUMPTION_BUCKET_PREFIX = 's3://consumption-bucket/prefix/'
-
-def infer_partition_columns(key, prefix):
-    """Infer partition columns and their values from the S3 key."""
-    partition_columns = []
-    partition_values = []
-    relative_path = key[len(prefix):]
-    parts = relative_path.split('/')
-    
-    for part in parts[:-1]:  # Exclude the actual file name
-        if '=' in part:
-            col_name, col_value = part.split('=')
-            partition_columns.append({'Name': col_name, 'Type': 'string'})
-            partition_values.append(col_value)
-    
-    return partition_columns, partition_values
 
 def lambda_handler(event, context):
-    try:
-        # Get bucket and object key from the event
-        bucket = event['detail']['bucket']['name']
-        key = event['detail']['object']['key']
-        
-        # Check if the object key matches the consumption bucket prefix
-        if not key.startswith(CONSUMPTION_BUCKET_PREFIX.split('s3://')[1]):
-            return {
-                'statusCode': 400,
-                'body': json.dumps('Object key does not match the consumption bucket prefix')
-            }
-        
-        # Get the last modified time of the object
-        response = s3_client.head_object(Bucket=bucket, Key=key)
-        last_modified = response['LastModified']
-        
-        # Get the current time
-        current_time = datetime.now(timezone.utc)
-        
-        # Check if the object was modified recently (within the last minute)
-        if (current_time - last_modified).seconds <= 60:
-            # Download the parquet file from S3
-            local_file_path = '/tmp/temp.parquet'
-            s3_client.download_file(bucket, key, local_file_path)
-            
-            # Infer schema using PyArrow
-            table = pq.read_table(local_file_path)
-            schema = table.schema
+    # Define input variables
+    target_prefix = event['target_prefix']  # The full S3 path in the consumption bucket to crawl
+    target_account = event['target_account']  # The target AWS account ID
+    target_database_name = event['target_database_name']  # The target Glue database name
 
-            # Convert PyArrow schema to Glue schema
-            glue_columns = []
-            for field in schema:
-                glue_columns.append({
-                    'Name': field.name,
-                    'Type': str(field.type)
-                })
-
-            # Extract table name from the file name
-            table_name = os.path.basename(key).split('.')[0]
-
-            # Infer partition columns
-            partition_columns, partition_values = infer_partition_columns(key, CONSUMPTION_BUCKET_PREFIX.split('s3://')[1])
-            
-            # Check if the table already exists
-            try:
-                glue_client.get_table(DatabaseName=DATABASE_NAME, Name=table_name)
-                print(f"Table {table_name} already exists.")
-                
-                if partition_columns:
-                    # Add partition to the existing table
-                    glue_client.create_partition(
-                        DatabaseName=DATABASE_NAME,
-                        TableName=table_name,
-                        PartitionInput={
-                            'Values': partition_values,
-                            'StorageDescriptor': {
-                                'Columns': glue_columns,
-                                'Location': f's3://{bucket}/{os.path.dirname(key)}',
-                                'InputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',
-                                'OutputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
-                                'SerdeInfo': {
-                                    'SerializationLibrary': 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe'
-                                }
-                            }
-                        }
-                    )
-                    return {
-                        'statusCode': 200,
-                        'body': json.dumps(f'Partition added to table {table_name} successfully!')
-                    }
-                else:
-                    return {
-                        'statusCode': 200,
-                        'body': json.dumps(f'Table {table_name} already exists and has no partitions.')
-                    }
-            except glue_client.exceptions.EntityNotFoundException:
-                # Table does not exist, proceed with creation
-                glue_client.create_table(
-                    DatabaseName=DATABASE_NAME,
-                    TableInput={
-                        'Name': table_name,
-                        'StorageDescriptor': {
-                            'Columns': glue_columns,
-                            'Location': f's3://{bucket}/{os.path.dirname(key)}',
-                            'InputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',
-                            'OutputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
-                            'SerdeInfo': {
-                                'SerializationLibrary': 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe'
-                            }
-                        },
-                        'PartitionKeys': partition_columns if partition_columns else None,
-                        'TableType': 'EXTERNAL_TABLE'
-                    }
-                )
-                return {
-                    'statusCode': 200,
-                    'body': json.dumps(f'Table {table_name} created successfully with partitions.' if partition_columns else f'Table {table_name} created successfully without partitions.')
-                }
-        
-        return {
-            'statusCode': 200,
-            'body': json.dumps('Table created or partition added successfully!')
-        }
+    # Extract bucket name and prefix from the full S3 path
+    if target_prefix.startswith("s3://"):
+        target_prefix = target_prefix[len("s3://"):]
+    source_bucket, target_prefix = target_prefix.split('/', 1)
     
-    except Exception as e:
-        print(e)
-        return {
-            'statusCode': 500,
-            'body': json.dumps('Error creating table or adding partition')
+    s3_client = boto3.client('s3')
+    glue_client = boto3.client('glue')
+    
+    # List all Parquet files under the target prefix in the source bucket
+    response = s3_client.list_objects_v2(Bucket=source_bucket, Prefix=target_prefix)
+    
+    parquet_files = [obj for obj in response.get('Contents', []) if obj['Key'].endswith('.parquet')]
+    
+    for file_obj in parquet_files:
+        file_key = file_obj['Key']
+        last_modified = file_obj['LastModified']
+        
+        # Check if the table already exists
+        table_name = file_key.split('/')[-1].replace('.parquet', '')
+        table_exists = False
+        try:
+            response = glue_client.get_table(DatabaseName=target_database_name, Name=table_name)
+            table_exists = True
+        except glue_client.exceptions.EntityNotFoundException:
+            table_exists = False
+        
+        if table_exists:
+            # Check if the file is updated
+            table = response['Table']
+            table_location = table['StorageDescriptor']['Location']
+            
+            # Extract the last modified date from the existing table location
+            existing_file_key = table_location.split(f"s3://{source_bucket}/")[-1]
+            existing_file_obj = s3_client.head_object(Bucket=source_bucket, Key=existing_file_key)
+            existing_last_modified = existing_file_obj['LastModified']
+            
+            # If the file has not been updated, skip to the next file
+            if last_modified <= existing_last_modified:
+                continue
+        
+        # Read the Parquet file
+        obj = s3_client.get_object(Bucket=source_bucket, Key=file_key)
+        data = obj['Body'].read()
+        table = pq.read_table(io.BytesIO(data))
+        
+        # Infer schema from the Parquet file
+        schema = table.schema
+        
+        # Convert schema to Glue compatible format
+        columns = []
+        for field in schema:
+            col_type = field.type
+            col_name = field.name
+            glue_type = 'string'  # Default to string
+            
+            if pd.api.types.is_integer_dtype(col_type):
+                glue_type = 'int'
+            elif pd.api.types.is_float_dtype(col_type):
+                glue_type = 'double'
+            elif pd.api.types.is_bool_dtype(col_type):
+                glue_type = 'boolean'
+            elif pd.api.types.is_datetime64_any_dtype(col_type):
+                glue_type = 'timestamp'
+            
+            columns.append({'Name': col_name, 'Type': glue_type})
+        
+        # Create or update Glue table
+        table_input = {
+            'Name': table_name,
+            'StorageDescriptor': {
+                'Columns': columns,
+                'Location': f"s3://{source_bucket}/{file_key}",
+                'InputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',
+                'OutputFormat': 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
+                'Compressed': False,
+                'SerdeInfo': {
+                    'SerializationLibrary': 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe',
+                    'Parameters': {}
+                }
+            },
+            'TableType': 'EXTERNAL_TABLE'
         }
+        
+        if table_exists:
+            glue_client.update_table(DatabaseName=target_database_name, TableInput=table_input)
+        else:
+            glue_client.create_table(DatabaseName=target_database_name, TableInput=table_input)
+    
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Tables created or updated successfully')
+    }
