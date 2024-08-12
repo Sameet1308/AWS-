@@ -39,8 +39,12 @@ def lambda_handler(event, context):
         source_key = file['Key']
         source_last_modified = file['LastModified']
 
+        # Extract the original file name and create the new file name
+        original_filename = source_key.split('/')[-1].replace('.txt', '')
+        new_filename = f"lu_{original_filename.lower()}.parquet"
+
         # Create target key, preserving folder structure
-        target_key = target_prefix_path + source_key[len(source_prefix_path):].replace('.txt', '.parquet')
+        target_key = f"{target_prefix_path}{new_filename}"
 
         # Check if the target file exists and get its last modified time
         try:
