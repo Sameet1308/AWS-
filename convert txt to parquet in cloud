@@ -4,26 +4,15 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from io import StringIO
-from datetime import datetime
 
 s3 = boto3.client('s3')
-ssm = boto3.client('ssm')
 
 # Define the input variables
 source_prefix = 's3://source-bucket-name/source/prefix/'
 target_prefix = 's3://target-bucket-name/target/prefix/'
 target_kms_key_id = 'your-target-kms-key-id'
-last_processed_param = 'last-processed-timestamp'  # SSM Parameter name to store the last processed time
 
 def lambda_handler(event, context):
-    # Get the last processed time from SSM Parameter Store
-    try:
-        response = ssm.get_parameter(Name=last_processed_param)
-        last_processed_time = response['Parameter']['Value']
-        last_processed_time = datetime.fromisoformat(last_processed_time)
-    except ssm.exceptions.ParameterNotFound:
-        last_processed_time = None
-
     # Parse bucket and prefix from the source prefix
     source_bucket = source_prefix.split('/')[2]
     source_prefix_path = '/'.join(source_prefix.split('/')[3:])
@@ -40,55 +29,65 @@ def lambda_handler(event, context):
         print("No files found in the source prefix.")
         return
 
-    # Filter and find the latest modified .txt file that is new or updated
-    txt_files = [obj for obj in objects if obj['Key'].endswith('.txt') and (last_processed_time is None or obj['LastModified'] > last_processed_time)]
+    # Filter and find the latest modified .txt file
+    txt_files = [obj for obj in objects if obj['Key'].endswith('.txt')]
     if not txt_files:
-        print("No new or updated .txt files found in the source prefix.")
+        print("No .txt files found in the source prefix.")
         return
 
-    latest_file = max(txt_files, key=lambda x: x['LastModified'])
+    for file in txt_files:
+        source_key = file['Key']
+        source_last_modified = file['LastModified']
 
-    # Read the content of the latest file
-    source_key = latest_file['Key']
-    obj = s3.get_object(Bucket=source_bucket, Key=source_key)
-    file_content = obj['Body'].read()
-    
-    # Try to read the TXT file with different encodings
-    data = StringIO(file_content.decode('utf-8', errors='ignore'))
-    
-    try:
-        df = pd.read_csv(data, delimiter='~', encoding='utf-8', on_bad_lines='skip')
-    except UnicodeDecodeError:
-        print("UTF-8 decoding failed, trying ISO-8859-1 encoding")
-        data = StringIO(file_content.decode('ISO-8859-1'))
-        df = pd.read_csv(data, delimiter='~', encoding='ISO-8859-1', on_bad_lines='skip')
+        # Create target key, preserving folder structure
+        target_key = target_prefix_path + source_key[len(source_prefix_path):].replace('.txt', '.parquet')
 
-    # Check DataFrame content
-    print(df.head())
+        # Check if the target file exists and get its last modified time
+        try:
+            target_response = s3.head_object(Bucket=target_bucket, Key=target_key)
+            target_last_modified = target_response['LastModified']
+            
+            # Skip if the target file is newer or the same
+            if target_last_modified >= source_last_modified:
+                print(f"Target file {target_key} is already up to date.")
+                continue
+        except s3.exceptions.ClientError as e:
+            # Target file does not exist, so we need to process the source file
+            if e.response['Error']['Code'] != '404':
+                raise
 
-    # Convert DataFrame to Parquet format
-    table = pa.Table.from_pandas(df)
-    parquet_buffer = pa.BufferOutputStream()
-    pq.write_table(table, parquet_buffer, compression='SNAPPY')
+        # Read the content of the latest file
+        obj = s3.get_object(Bucket=source_bucket, Key=source_key)
+        file_content = obj['Body'].read()
 
-    # Create target key, preserving folder structure
-    target_key = target_prefix_path + source_key[len(source_prefix_path):].replace('.txt', '.parquet')
-    
-    # Copy the file to the target bucket with KMS encryption
-    s3.put_object(
-        Bucket=target_bucket,
-        Key=target_key,
-        Body=parquet_buffer.getvalue().to_pybytes(),
-        ServerSideEncryption='aws:kms',
-        SSEKMSKeyId=target_kms_key_id
-    )
+        # Try to read the TXT file with different encodings
+        data = StringIO(file_content.decode('utf-8', errors='ignore'))
 
-    print(f"File {source_key} copied to {target_key} in Parquet format with Snappy compression.")
+        try:
+            df = pd.read_csv(data, delimiter='~', encoding='utf-8', error_bad_lines=False)
+        except UnicodeDecodeError:
+            print("UTF-8 decoding failed, trying ISO-8859-1 encoding")
+            data = StringIO(file_content.decode('ISO-8859-1'))
+            df = pd.read_csv(data, delimiter='~', encoding='ISO-8859-1', error_bad_lines=False)
 
-    # Update the last processed time in SSM Parameter Store
-    new_processed_time = latest_file['LastModified'].isoformat()
-    ssm.put_parameter(Name=last_processed_param, Value=new_processed_time, Type='String', Overwrite=True)
-    print(f"Updated last processed time to {new_processed_time}")
+        # Check DataFrame content
+        print(df.head())
+
+        # Convert DataFrame to Parquet format
+        table = pa.Table.from_pandas(df)
+        parquet_buffer = pa.BufferOutputStream()
+        pq.write_table(table, parquet_buffer, compression='SNAPPY')
+
+        # Copy the file to the target bucket with KMS encryption
+        s3.put_object(
+            Bucket=target_bucket,
+            Key=target_key,
+            Body=parquet_buffer.getvalue().to_pybytes(),
+            ServerSideEncryption='aws:kms',
+            SSEKMSKeyId=target_kms_key_id
+        )
+
+        print(f"File {source_key} copied to {target_key} in Parquet format with Snappy compression.")
 
 # Example to test the function locally
 if __name__ == "__main__":
