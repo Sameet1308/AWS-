@@ -38,8 +38,16 @@ def copy_files_with_conversion(source_bucket, source_prefix, target_bucket, targ
         csv_obj = s3.get_object(Bucket=source_bucket, Key=source_key)
         csv_content = csv_obj['Body'].read().decode('utf-8')
         
-        # Convert CSV to Parquet
-        csv_df = pd.read_csv(BytesIO(csv_content.encode('utf-8')))
+        # Convert CSV to Parquet with handling for special characters
+        csv_df = pd.read_csv(
+            BytesIO(csv_content.encode('utf-8')),
+            quotechar='"',  # Use double quotes to handle fields with commas
+            escapechar='\\',  # Use backslash as escape character for special chars
+            sep=',',  # Specify comma as separator
+            engine='python'  # Use Python engine for complex CSV parsing
+        )
+        
+        # Convert the DataFrame to Parquet format
         table = pa.Table.from_pandas(csv_df)
         buffer = BytesIO()
         pq.write_table(table, buffer)
