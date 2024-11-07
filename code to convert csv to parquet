@@ -1,26 +1,68 @@
-import logging
+import boto3
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from io import BytesIO
+from botocore.exceptions import ClientError
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Initialize the S3 client
+s3 = boto3.client('s3')
 
-def csv_to_parquet(csv_file_path, parquet_file_path):
+def copy_files_with_conversion(source_bucket, source_prefix, target_bucket, target_prefix, kms_key):
+    # Get the list of files in the source prefix
     try:
-        # Read the CSV file
-        df = pd.read_csv(csv_file_path)
-        logging.info(f"Read CSV file: {csv_file_path}")
+        source_objects = s3.list_objects_v2(Bucket=source_bucket, Prefix=source_prefix).get('Contents', [])
+    except ClientError as e:
+        print(f"Error accessing source bucket: {e}")
+        return
+
+    for obj in source_objects:
+        source_key = obj['Key']
         
-        # Convert to Parquet and save to the specified path
-        df.to_parquet(parquet_file_path, index=False)
-        logging.info(f"Converted to Parquet and saved to: {parquet_file_path}")
+        # Skip non-CSV files
+        if not source_key.endswith('.csv'):
+            continue
         
-    except Exception as e:
-        logging.error(f"Error converting {csv_file_path} to Parquet: {e}")
+        # Define target key with similar folder structure but Parquet format
+        target_key = source_key.replace(source_prefix, target_prefix).replace('.csv', '.parquet')
+        
+        # Check if the file has been modified or is new
+        try:
+            target_obj = s3.head_object(Bucket=target_bucket, Key=target_key)
+            if obj['LastModified'] <= target_obj['LastModified']:
+                continue  # Skip if the file is not modified
+        except ClientError:
+            pass  # Proceed if the target file doesn't exist
 
-# Example usage
-csv_file_path = '/path/to/your/nas/location/xbxbx.csv'
-parquet_file_path = '/path/to/your/nas/location/xbxbx.parquet'
+        # Read CSV file from S3
+        csv_obj = s3.get_object(Bucket=source_bucket, Key=source_key)
+        csv_content = csv_obj['Body'].read().decode('utf-8')
+        
+        # Convert CSV to Parquet
+        csv_df = pd.read_csv(BytesIO(csv_content.encode('utf-8')))
+        table = pa.Table.from_pandas(csv_df)
+        buffer = BytesIO()
+        pq.write_table(table, buffer)
+        
+        # Upload the Parquet file to the target bucket with KMS encryption
+        try:
+            s3.put_object(
+                Bucket=target_bucket,
+                Key=target_key,
+                Body=buffer.getvalue(),
+                ServerSideEncryption='aws:kms',
+                SSEKMSKeyId=kms_key
+            )
+            print(f"Copied and converted: {source_key} to {target_key}")
+        except ClientError as e:
+            print(f"Error uploading {target_key}: {e}")
 
-csv_to_parquet(csv_file_path, parquet_file_path)
+# Parameters
+source_bucket = 'your-source-bucket'
+source_prefix = 'your/source/prefix/'
+target_bucket = 'your-target-bucket'
+target_prefix = 'your/target/prefix/'
+kms_key = 'your-kms-key-id'
 
-print(f"Converted {csv_file_path} to {parquet_file_path}")
+# Function call
+copy_files_with_conversion(source_bucket, source_prefix, target_bucket, target_prefix, kms_key)
